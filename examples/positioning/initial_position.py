@@ -6,7 +6,7 @@
 #  +------+    / /_/ / / /_/ /__/ /  / /_/ / / /_/  __/
 #   ||  ||    /_____/_/\__/\___/_/   \__,_/ /___/\___/
 #
-#  Copyright (C) 2016 Bitcraze AB
+#  Copyright (C) 2019 Bitcraze AB
 #
 #  Crazyflie Nano Quadcopter Client
 #
@@ -24,14 +24,18 @@
 #  Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
 #  MA  02110-1301, USA.
 """
-Simple example that connects to one crazyflie (check the address at the top
-and update it to your crazyflie address) and send a sequence of setpoints,
-one every 5 seconds.
+Simple example that connects to one crazyflie, sets the initial position/yaw
+and flies a trajectory.
 
-This example is intended to work with the Loco Positioning System in TWR TOA
-mode. It aims at documenting how to set the Crazyflie in position control mode
-and how to send setpoints.
+The initial pose (x, y, z, yaw) is configured in a number of variables and
+the trajectory is flown relative to this position, using the initial yaw.
+
+This example is intended to work with any absolute positioning system.
+It aims at documenting how to take off with the Crazyflie in an orientation
+that is different from the standard positive X orientation and how to set the
+initial position of the kalman estimator.
 """
+import math
 import time
 
 import cflib.crtp
@@ -44,15 +48,12 @@ from cflib.crazyflie.syncLogger import SyncLogger
 uri = 'radio://0/80/2M'
 
 # Change the sequence according to your setup
-#             x    y    z  YAW
+#             x    y    z
 sequence = [
-    (2.5, 2.5, 1.2, 0),
-    (1.5, 2.5, 1.2, 0),
-    (2.5, 2.0, 1.2, 0),
-    (3.5, 2.5, 1.2, 0),
-    (2.5, 3.0, 1.2, 0),
-    (2.5, 2.5, 1.2, 0),
-    (2.5, 2.5, 0.4, 0),
+    (0, 0, 0.7),
+    (-0.7, 0, 0.7),
+    (0, 0, 0.7),
+    (0, 0, 0.2),
 ]
 
 
@@ -97,6 +98,15 @@ def wait_for_position_estimator(scf):
                 break
 
 
+def set_initial_position(scf, x, y, z, yaw_deg):
+    scf.cf.param.set_value('kalman.initialX', x)
+    scf.cf.param.set_value('kalman.initialY', y)
+    scf.cf.param.set_value('kalman.initialZ', z)
+
+    yaw_radians = math.radians(yaw_deg)
+    scf.cf.param.set_value('kalman.initialYaw', yaw_radians)
+
+
 def reset_estimator(scf):
     cf = scf.cf
     cf.param.set_value('kalman.resetEstimation', '1')
@@ -106,34 +116,18 @@ def reset_estimator(scf):
     wait_for_position_estimator(cf)
 
 
-def position_callback(timestamp, data, logconf):
-    x = data['kalman.stateX']
-    y = data['kalman.stateY']
-    z = data['kalman.stateZ']
-    print('pos: ({}, {}, {})'.format(x, y, z))
-
-
-def start_position_printing(scf):
-    log_conf = LogConfig(name='Position', period_in_ms=500)
-    log_conf.add_variable('kalman.stateX', 'float')
-    log_conf.add_variable('kalman.stateY', 'float')
-    log_conf.add_variable('kalman.stateZ', 'float')
-
-    scf.cf.log.add_config(log_conf)
-    log_conf.data_received_cb.add_callback(position_callback)
-    log_conf.start()
-
-
-def run_sequence(scf, sequence):
+def run_sequence(scf, sequence, base_x, base_y, base_z, yaw):
     cf = scf.cf
 
     for position in sequence:
         print('Setting position {}'.format(position))
+
+        x = position[0] + base_x
+        y = position[1] + base_y
+        z = position[2] + base_z
+
         for i in range(50):
-            cf.commander.send_position_setpoint(position[0],
-                                                position[1],
-                                                position[2],
-                                                position[3])
+            cf.commander.send_position_setpoint(x, y, z, yaw)
             time.sleep(0.1)
 
     cf.commander.send_stop_setpoint()
@@ -145,7 +139,19 @@ def run_sequence(scf, sequence):
 if __name__ == '__main__':
     cflib.crtp.init_drivers(enable_debug_driver=False)
 
+    # Set these to the position and yaw based on how your Crazyflie is placed
+    # on the floor
+    initial_x = 1.0
+    initial_y = 1.0
+    initial_z = 0.0
+    initial_yaw = 90  # In degrees
+    # 0: positive X direction
+    # 90: positive Y direction
+    # 180: negative X direction
+    # 270: negative Y direction
+
     with SyncCrazyflie(uri, cf=Crazyflie(rw_cache='./cache')) as scf:
+        set_initial_position(scf, initial_x, initial_y, initial_z, initial_yaw)
         reset_estimator(scf)
-        # start_position_printing(scf)
-        run_sequence(scf, sequence)
+        run_sequence(scf, sequence,
+                     initial_x, initial_y, initial_z, initial_yaw)
